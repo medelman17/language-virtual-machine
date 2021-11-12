@@ -290,7 +290,17 @@ impl VirtualMachine {
                 self.next_eight_bits();
                 self.next_eight_bits();
             }
-            Opcode::LUI => {}
+            Opcode::LUI => {
+                let register = self.next_eight_bits() as usize;
+                let value = self.registers[register];
+                let uv1 = i32::from(self.next_eight_bits());
+                let uv2 = i32::from(self.next_eight_bits());
+                let value = value.checked_shl(8).unwrap();
+                let value = value | uv1;
+                let value = value.checked_shl(8).unwrap();
+                let value = value | uv2;
+                self.registers[register] = value;
+            }
             Opcode::PRTS => {
                 let starting_offset = self.next_sixteen_bits() as usize;
                 let mut ending_offset = starting_offset;
@@ -383,7 +393,7 @@ mod tests {
     #[test]
     fn opcode_igl() {
         let mut vm = VirtualMachine::new();
-        let bytes = vec![200, 0, 0, 0];
+        let bytes = vec![254, 0, 0, 0];
         vm.program = bytes;
         vm.run_once();
         assert_eq!(vm.pc, 1);
@@ -391,10 +401,38 @@ mod tests {
 
     #[test]
     fn opcode_load() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::get_test_vm();
         vm.program = vec![0, 0, 1, 244];
-        vm.run_once();
+        vm.program = VirtualMachine::prepend_header(vm.program);
+        vm.run();
         assert_eq!(vm.registers[0], 500);
+    }
+
+    #[test]
+    fn test_add_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.program = vec![1, 0, 1, 2];
+        test_vm.program = VirtualMachine::prepend_header(test_vm.program);
+        test_vm.run();
+        assert_eq!(test_vm.registers[2], 15);
+    }
+
+    #[test]
+    fn test_sub_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.program = vec![2, 1, 0, 2];
+        test_vm.program = VirtualMachine::prepend_header(test_vm.program);
+        test_vm.run();
+        assert_eq!(test_vm.registers[2], 5);
+    }
+
+    #[test]
+    fn test_mul_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.program = vec![3, 0, 1, 2];
+        test_vm.program = VirtualMachine::prepend_header(test_vm.program);
+        test_vm.run();
+        assert_eq!(test_vm.registers[2], 50);
     }
 
     #[test]
@@ -404,6 +442,15 @@ mod tests {
         vm.program = vec![6, 0, 0, 0];
         vm.run_once();
         assert_eq!(vm.pc, 1);
+    }
+
+    #[test]
+    fn test_div_opcode() {
+        let mut vm = VirtualMachine::get_test_vm();
+        vm.program = vec![4, 1, 0, 2];
+        vm.program = VirtualMachine::prepend_header(vm.program);
+        vm.run();
+        assert_eq!(vm.registers[2], 2)
     }
 
     #[test]
@@ -455,7 +502,7 @@ mod tests {
         let mut vm = VirtualMachine::new();
         vm.registers[0] = 20;
         vm.registers[1] = 10;
-        vm.program = vec![11, 0, 1, 0, 11, 0, 1, 0, 11, 0, 1, 0];
+        vm.program = vec![14, 0, 1, 0, 14, 0, 1, 0, 14, 0, 1, 0];
         vm.run_once();
         assert_eq!(vm.equal_flag, true);
         vm.registers[0] = 10;
@@ -464,6 +511,38 @@ mod tests {
         vm.registers[0] = 5;
         vm.run_once();
         assert_eq!(vm.equal_flag, false);
+    }
+
+    #[test]
+    fn test_gte_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.registers[0] = 20;
+        test_vm.registers[1] = 10;
+        test_vm.program = vec![11, 0, 1, 0, 11, 0, 1, 0, 11, 0, 1, 0];
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, true);
+        test_vm.registers[0] = 10;
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, true);
+        test_vm.registers[0] = 5;
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, false);
+    }
+
+    #[test]
+    fn test_lte_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.registers[0] = 20;
+        test_vm.registers[1] = 10;
+        test_vm.program = vec![12, 0, 1, 0, 12, 0, 1, 0, 12, 0, 1, 0];
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, false);
+        test_vm.registers[0] = 10;
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, true);
+        test_vm.registers[0] = 5;
+        test_vm.run_once();
+        assert_eq!(test_vm.equal_flag, true);
     }
 
     #[test]
@@ -488,11 +567,11 @@ mod tests {
 
     #[test]
     fn opcode_aloc() {
-        let mut vm = VirtualMachine::new();
-        vm.registers[0] = 1024;
+        let mut vm = VirtualMachine::get_test_vm();
+        vm.registers[0] = 1086;
         vm.program = vec![17, 0, 0, 0];
         vm.run_once();
-        assert_eq!(vm.heap.len(), 1024);
+        assert_eq!(vm.heap.len(), 1024 + DEFAULT_HEAP_STARTING_SIZE);
     }
 
     #[test]
@@ -511,6 +590,23 @@ mod tests {
         vm.program = vec![19, 0, 0, 0];
         vm.run_once();
         assert_eq!(vm.registers[0], 0);
+    }
+
+    #[test]
+    fn test_lui_opcode() {
+        let mut test_vm = VirtualMachine::new();
+        test_vm.program = vec![39, 0, 0, 1];
+        test_vm.run_once();
+        assert_eq!(test_vm.registers[0], 1);
+    }
+
+    #[test]
+    fn test_prts_opcode() {
+        let mut test_vm = VirtualMachine::get_test_vm();
+        test_vm.ro_data.append(&mut vec![72, 101, 108, 108, 111, 0]);
+        test_vm.program = vec![21, 0, 0, 0];
+        test_vm.run_once();
+        // TODO: How can we validate the output since it is just printing to stdout in a test?
     }
 
     #[test]

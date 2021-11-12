@@ -48,17 +48,17 @@ impl From<u8> for Opcode {
             8 => return Opcode::JMPB,
             9 => return Opcode::EQ,
             10 => return Opcode::NEQ,
-            11 => return Opcode::GT,
-            12 => return Opcode::LT,
-            13 => return Opcode::GTQ,
-            14 => return Opcode::LTQ,
+            11 => return Opcode::GTQ,
+            12 => return Opcode::LTQ,
+            13 => return Opcode::LT,
+            14 => return Opcode::GT,
             15 => return Opcode::JEQ,
             16 => return Opcode::JNEQ,
             17 => return Opcode::ALOC,
             18 => return Opcode::INC,
             19 => return Opcode::DEC,
-            20 => return Opcode::PRTS,
-            21 => return Opcode::LUI,
+            21 => return Opcode::PRTS,
+            39 => return Opcode::LUI,
 
             // If the VirtualMachine ever encounters a number we didn't
             // plan to be an Opcode, we return the ILG opcode allowing
@@ -92,6 +92,7 @@ impl<'a> From<CompleteStr<'a>> for Opcode {
             CompleteStr("inc") => Opcode::INC,
             CompleteStr("dec") => Opcode::DEC,
             CompleteStr("prts") => Opcode::PRTS,
+            CompleteStr("lui") => Opcode::LUI,
 
             _ => Opcode::IGL,
         }
@@ -132,5 +133,11 @@ mod tests {
         assert_eq!(opcode, Opcode::LOAD);
         let opcode = Opcode::from(CompleteStr("illegal"));
         assert_eq!(opcode, Opcode::IGL);
+    }
+
+    #[test]
+    fn test_int_to_opcode() {
+        let opcode = Opcode::from(39);
+        assert_eq!(opcode, Opcode::LUI);
     }
 }
