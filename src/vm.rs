@@ -1,10 +1,66 @@
+use std;
+use std::io::Cursor;
+// use std::net::SocketAddr;
+// use std::sync::{Arc, RwLock};
+// use std::thread;
+
+use byteorder::*;
+use chrono::prelude::*;
+use num_cpus;
+use uuid::Uuid;
+
+use crate::assembler::{PIE_HEADER_LENGTH, PIE_HEADER_PREFIX};
 use crate::instruction::Opcode;
+
+/// Default starting size for a VM's heap
+pub const DEFAULT_HEAP_STARTING_SIZE: usize = 64;
+
+/// Default stack starting space. We'll default to 2MB.
+pub const DEFAULT_STACK_SPACE: usize = 2097152;
+
+#[derive(Clone, Debug)]
+pub enum VMEventType {
+    Start,
+    GracefulStop { code: u32 },
+    Crash { code: u32 },
+}
+
+impl VMEventType {
+    pub fn stop_code(&self) -> u32 {
+        match &self {
+            VMEventType::Start => 0,
+            VMEventType::GracefulStop { code } => *code,
+            VMEventType::Crash { code } => *code,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Struct for a VMEvent that includes the application ID and time
+pub struct VMEvent {
+    pub event: VMEventType,
+    at: DateTime<Utc>,
+    application_id: Uuid,
+}
 
 pub struct VirtualMachine {
     /// Array that simulates having hardware registers
     pub registers: [i32; 32],
-    /// Counter that tracks which byte is being executed
+    /// Array that simulates having floating point hardware registers
+    pub float_registers: [f64; 32],
+    pub logical_cores: usize,
+    pub stack: Vec<i32>,
+    pub loop_counter: usize,
+    pub id: Uuid,
+    events: Vec<VMEvent>,
+
+    /// Program counter that tracks which byte is being executed
     pc: usize,
+    /// Keeps track of where in the stack the program currently is
+    pub sp: usize,
+    /// Keeps track of the current frame pointer
+    pub bp: usize,
+
     /// Bytecode of the program being run
     pub program: Vec<u8>,
     /// Remainder of modulo division ops
@@ -12,26 +68,73 @@ pub struct VirtualMachine {
     /// Result of last comparison op
     equal_flag: bool,
     heap: Vec<u8>,
+    /// Contains the read-only section data
+    ro_data: Vec<u8>,
+    alias: Option<String>,
 }
 
 impl VirtualMachine {
     pub fn new() -> Self {
         VirtualMachine {
+            id: Uuid::new_v4(),
+            events: Vec::new(),
+            logical_cores: num_cpus::get(),
+            loop_counter: 0,
+            stack: Vec::with_capacity(DEFAULT_STACK_SPACE),
             registers: [0; 32],
+            float_registers: [0.0; 32],
             program: vec![],
             pc: 0,
+            sp: 0,
+            bp: 0,
             remainder: 0,
             equal_flag: false,
-            heap: vec![],
+            heap: vec![0, DEFAULT_HEAP_STARTING_SIZE as u8],
+            ro_data: vec![],
+            alias: None,
         }
     }
 
+    pub fn with_alias(mut self, alias: String) -> Self {
+        if alias == "" {
+            self.alias = None;
+        } else {
+            self.alias = Some(alias);
+        }
+        self
+    }
+
     /// Loops as long as instructions can be executed.
-    pub fn run(&mut self) {
-        let mut is_done = false;
-        while !is_done {
+    pub fn run(&mut self) -> Vec<VMEvent> {
+        self.events.push(VMEvent {
+            event: VMEventType::Start,
+            at: Utc::now(),
+            application_id: self.id,
+        });
+
+        if !self.verify_header() {
+            self.events.push(VMEvent {
+                event: VMEventType::Crash { code: 1 },
+                at: Utc::now(),
+                application_id: self.id,
+            });
+            error!("Header was incorrect");
+            return self.events.clone();
+        }
+
+        self.pc = 68 + self.get_starting_offset();
+        let mut is_done = None;
+        while is_done.is_none() {
             is_done = self.execute_instruction();
         }
+        self.events.push(VMEvent {
+            event: VMEventType::GracefulStop {
+                code: is_done.unwrap(),
+            },
+            at: Utc::now(),
+            application_id: self.id,
+        });
+        self.events.clone()
     }
 
     /// Executes one instruction. Meant to allow for more controlled execution.
@@ -43,9 +146,27 @@ impl VirtualMachine {
         self.program.push(b);
     }
 
-    fn execute_instruction(&mut self) -> bool {
+    pub fn add_bytes(&mut self, mut b: Vec<u8>) {
+        self.program.append(&mut b);
+    }
+
+    pub fn get_test_vm() -> Self {
+        let mut vm = VirtualMachine::new();
+        vm.registers[0] = 5;
+        vm.registers[1] = 10;
+        vm
+    }
+
+    fn verify_header(&self) -> bool {
+        if self.program[0..4] != PIE_HEADER_PREFIX {
+            return false;
+        }
+        true
+    }
+
+    fn execute_instruction(&mut self) -> Option<u32> {
         if self.pc >= self.program.len() {
-            return true;
+            return Some(1);
         }
 
         match self.decode_opcode() {
@@ -77,7 +198,7 @@ impl VirtualMachine {
             }
             Opcode::HLT => {
                 println!("HLT encountered");
-                return true;
+                return Some(1);
             }
             Opcode::JMP => {
                 let target = self.registers[self.next_eight_bits() as usize];
@@ -155,7 +276,7 @@ impl VirtualMachine {
             Opcode::IGL => {
                 println!("Illegal instruction encountered");
                 // This was false
-                return true;
+                return Some(1);
             }
             Opcode::INC => {
                 let register = self.next_eight_bits() as usize;
@@ -169,14 +290,48 @@ impl VirtualMachine {
                 self.next_eight_bits();
                 self.next_eight_bits();
             }
+            Opcode::LUI => {}
+            Opcode::PRTS => {
+                let starting_offset = self.next_sixteen_bits() as usize;
+                let mut ending_offset = starting_offset;
+                let slice = self.ro_data.as_slice();
+                while slice[ending_offset] != 0 {
+                    ending_offset += 1;
+                }
+                let result = std::str::from_utf8(&slice[starting_offset..ending_offset]);
+                match result {
+                    Ok(s) => {
+                        print!("{}", s);
+                    }
+                    Err(e) => {
+                        println!("Error decoding string for prts instruction: {:#?}", e)
+                    }
+                };
+            }
         }
-        false
+        None
+    }
+
+    pub fn print_i32_register(&self, register: usize) {
+        let bits = self.registers[register];
+        println!("bits: {:#032b}", bits);
     }
 
     fn decode_opcode(&mut self) -> Opcode {
         let opcode = Opcode::from(self.program[self.pc]);
         self.pc += 1;
         return opcode;
+    }
+
+    fn get_starting_offset(&self) -> usize {
+        let mut rdr = Cursor::new(&self.program[64..68]);
+        rdr.read_i32::<LittleEndian>().unwrap() as usize
+    }
+
+    fn _i32_to_bytes(num: i32) -> [u8; 4] {
+        let mut buf: [u8; 4] = [0, 0, 0, 0];
+        buf.as_mut().write_i32::<LittleEndian>(num).unwrap();
+        buf
     }
 
     fn next_eight_bits(&mut self) -> u8 {
@@ -190,10 +345,22 @@ impl VirtualMachine {
         self.pc += 2;
         return result;
     }
+
+    pub fn prepend_header(mut b: Vec<u8>) -> Vec<u8> {
+        let mut prepension = vec![];
+        for byte in PIE_HEADER_PREFIX.into_iter() {
+            prepension.push(byte.clone());
+        }
+
+        while prepension.len() < PIE_HEADER_LENGTH + 4 {
+            prepension.push(0);
+        }
+        prepension.append(&mut b);
+        prepension
+    }
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
@@ -344,5 +511,14 @@ mod tests {
         vm.program = vec![19, 0, 0, 0];
         vm.run_once();
         assert_eq!(vm.registers[0], 0);
+    }
+
+    #[test]
+    fn opcode_mul() {
+        let mut vm = VirtualMachine::get_test_vm();
+        vm.program = vec![3, 0, 1, 2];
+        vm.program = VirtualMachine::prepend_header(vm.program);
+        vm.run();
+        assert_eq!(vm.registers[2], 50);
     }
 }

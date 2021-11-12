@@ -2,7 +2,6 @@ use crate::assembler::Token;
 use nom::types::CompleteStr;
 use nom::{alphanumeric, multispace};
 
-/// Looks for a user-defined label, such as `label1:`
 named!(pub label_declaration<CompleteStr, Token>,
     ws!(
         do_parse!(

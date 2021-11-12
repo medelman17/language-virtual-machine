@@ -1,3 +1,4 @@
+use crate::assembler::label_parsers::label_usage;
 use crate::assembler::register_parsers::register;
 use nom::digit;
 use nom::types::CompleteStr;
@@ -6,7 +7,18 @@ use crate::assembler::Token;
 
 named!(pub operand<CompleteStr, Token>,
     alt!(
-        integer_operand | register
+        integer_operand | register | irstring | label_usage
+    )
+);
+
+named!(irstring<CompleteStr, Token>,
+    do_parse!(
+        tag!("'") >>
+        content: take_until!("'") >>
+        tag!("'") >>
+        (
+            Token::IrString{ name: content.to_string()}
+        )
     )
 );
 
@@ -33,4 +45,10 @@ fn parse_integer_operand() {
     // Test an invalid one (missing the #)
     let result = integer_operand(CompleteStr("10"));
     assert_eq!(result.is_ok(), false);
+}
+
+#[test]
+fn parse_string_operand() {
+    let result = irstring(CompleteStr("'This is a test'"));
+    assert_eq!(result.is_ok(), true);
 }

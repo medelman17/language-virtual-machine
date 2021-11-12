@@ -29,6 +29,8 @@ pub enum Opcode {
     ALOC,
     INC,
     DEC,
+    PRTS,
+    LUI,
     IGL,
 }
 
@@ -55,6 +57,8 @@ impl From<u8> for Opcode {
             17 => return Opcode::ALOC,
             18 => return Opcode::INC,
             19 => return Opcode::DEC,
+            20 => return Opcode::PRTS,
+            21 => return Opcode::LUI,
 
             // If the VirtualMachine ever encounters a number we didn't
             // plan to be an Opcode, we return the ILG opcode allowing
@@ -83,6 +87,12 @@ impl<'a> From<CompleteStr<'a>> for Opcode {
             CompleteStr("lte") => Opcode::LTQ,
             CompleteStr("lt") => Opcode::LT,
             CompleteStr("jmpe") => Opcode::JEQ,
+            CompleteStr("jmpne") => Opcode::JNEQ,
+            CompleteStr("aloc") => Opcode::ALOC,
+            CompleteStr("inc") => Opcode::INC,
+            CompleteStr("dec") => Opcode::DEC,
+            CompleteStr("prts") => Opcode::PRTS,
+
             _ => Opcode::IGL,
         }
     }

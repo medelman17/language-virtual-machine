@@ -1,0 +1,9 @@
+name: iridium
+version: "0.0.1"
+author: Michael Edelman <mike.edelman@gmail.com>
+about: Interpreter
+args:
+    - INPUT_FILE:
+      help: Path to the .iasm or .ir file to run
+      required: false
+      index: 1
